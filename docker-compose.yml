@@ -1,0 +1,109 @@
+version: '3'
+
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: medusa-db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - medusa-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    ports:
+      - 6379:6379
+    volumes:
+      - redis-data:/data
+    networks:
+      - medusa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+      
+  medusa-backend:
+    image: node:20
+    container_name: medusa-backend
+    working_dir: /app
+    ports:
+      - 9000:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/medusa-db
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+      JWT_SECRET: supersecret
+      COOKIE_SECRET: supersecret
+      PORT: 9000
+      STORE_CORS: "*"
+      ADMIN_CORS: "*"
+      AUTH_CORS: "*"
+      MEDUSA_FF_SKIP_LOADING_MODULES: true
+    networks:
+      - medusa-network
+    volumes:
+      - ./my-medusa-store:/app
+    command: >
+      sh -c "
+        npm install @medusajs/stock-location &&
+        npm run build && 
+        echo 'Starting Medusa backend' && 
+        npm run start
+      "
+    restart: unless-stopped
+
+  medusa-storefront:
+    image: node:20
+    container_name: medusa-storefront
+    working_dir: /app
+    ports:
+      - 8000:8000
+    depends_on:
+      - medusa-backend
+    environment:
+      NEXT_PUBLIC_MEDUSA_BACKEND_URL: http://localhost:9000
+      MEDUSA_BACKEND_URL: http://medusa-backend:9000
+      NEXT_PUBLIC_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_DEFAULT_REGION: us
+      NODE_ENV: development
+    networks:
+      - medusa-network
+    volumes:
+      - ./my-medusa-store-storefront:/app
+    # Add a delay to ensure the backend is up before starting the frontend
+    command: >
+      sh -c "
+        echo 'Waiting for backend to be ready...' && 
+        sleep 30 && 
+        echo 'Installing dependencies' && 
+        npm install && 
+        echo 'Starting Next.js storefront' && 
+        npm run dev
+      "
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  medusa-network:
+    driver: bridge 
